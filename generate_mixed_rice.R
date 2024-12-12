@@ -32,3 +32,5 @@ mixedsample <- function(data,times){
   }
   return(mixed_data)
 }
+
+print(mixed_data)
