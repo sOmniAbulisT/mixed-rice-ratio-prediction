@@ -79,7 +79,6 @@ LDA_fit <- predict(lda_model, newdata = test_data)
 lda_cm <- table(predict = LDA_fit, actual = test_data$Country)
 cfmaccuracy(lda_cm)
 
-
 #############
 #### PLS ####
 #############
@@ -273,21 +272,50 @@ cfmaccuracy(svm_cm_s)
 #########################################################################################
 #########################################################################################
 
-train_data$Country <- as.factor(train_data$Country)
-test_data$Country <- as.factor(test_data$Country)
-
-train_mixed <- train_data[train_data$Country == "Mixed", ] #混米訓練集
-test_mixed <- test_data[test_data$Country == "Mixed", ] #混米測試集
+m2 <- mixedsample(raw.data, 1000)
+train_index <- sample(1:nrow(m2), 0.8 * nrow(m2)) # 隨機抽建立訓練集編號
+train_data2 <- m2[train_index, ]
+test_data2 <- m2[-train_index, ]
 
 #### Linear Models
 
-lm_model <- lm(ratio_t ~ X1 + X2 + X3 + X4 + X5, data = mixed_data)
+lm_model_t <- lm(ratio_t ~ X1 + X2 + X3 + X4 + X5, data = train_data2)
+lm_model_v <- lm(ratio_v ~ X1 + X2 + X3 + X4 + X5, data = train_data2)
 
-ratio_t_pred1 <- predict(lm_model, newdata = train_mixed)
-ratio_t_pred2 <- predict(lm_model, newdata = test_mixed)
+ratio_t_pred1 <- predict(lm_model_t, newdata = train_data2)
+ratio_v_pred1 <- predict(lm_model_v, newdata = train_data2)
+mean((ratio_t_pred1 - train_data2$ratio_t)^2)
+mean((ratio_v_pred1 - train_data2$ratio_v)^2)
 
-mean((ratio_t_pred1 - train_mixed$ratio_t)^2)
-mean((ratio_t_pred2 - test_mixed$ratio_t)^2)
+ratio_t_pred2 <- predict(lm_model_t, newdata = test_data2)
+ratio_v_pred2 <- predict(lm_model_v, newdata = test_data2)
+mean((ratio_t_pred2 - test_data2$ratio_t)^2)
+mean((ratio_v_pred2 - test_data2$ratio_v)^2)
 
-ratio_t_pred_with_ci <- predict(lm_model, newdata = test_mixed, 
+ratio_t_pred_with_ci <- predict(lm_model_t, newdata = test_data2, 
                                 interval = "confidence", level = 0.95)
+ratio_v_pred_with_ci <- predict(lm_model_v, newdata = test_data2, 
+                                interval = "confidence", level = 0.95)
+
+MRPM <- function(newdata){
+  svm_p <- predict(svm_model_p, newdata = newdata)
+  input <- newdata[which(svm_p == "Mixed"),]
+
+  t <- predict(lm_model_t, newdata = input, 
+             interval = "confidence", level = 0.95)
+  t <- round(t,3)
+
+  v <- predict(lm_model_v, newdata = input, 
+             interval = "confidence", level = 0.95)
+  v <- round(v,3)
+  row.name <- as.numeric(row.names(input))
+  
+  for (n in 1:nrow(input)) {
+    cat("第",row.name[n],"筆資料是混米","\n",
+        "台灣米比例為:",t[n,1]," 95% 信賴區間為:",t[n,2:3],"\n",
+        "越南米比例為:",v[n,1]," 95% 信賴區間為:",v[n,2:3],"\n","\n")
+  }
+  return(cat("有",nrow(input),"筆資料是混米"))
+}
+
+ 
