@@ -1,0 +1,360 @@
+meansquareerror <- function(actual_value, predict_value){
+  meansquareerror <- mean((actual_value - predict_value)^2)
+  return(meansquareerror)
+}
+
+cfmaccuracy <- function(matrix){
+  
+  accuracy <- sum(diag(matrix)) / sum(matrix)
+  return(cat("準確率：", accuracy, "\n"))
+  
+}
+
+raw.data <- raw.data
+
+str(raw.data[, 2:8])
+summary(raw.data[, 2:8])
+
+colSums(is.na(raw.data))
+
+#資料清理
+vietnam <- raw.data[which(raw.data$Country == "Vietnam"), ] #抽取出rawdata中的越南樣本
+v <- cbind(vietnam[,2:7], ratio_t = 0, ratio_v = 1) 
+
+taiwan <- raw.data[which(raw.data$Country == "Taiwan"), ] # 抽取出rawdata中的臺灣樣本
+t <- cbind(taiwan[,2:7], ratio_t = 1, ratio_v = 0)
+
+### 創建混米生成的函式
+mixedsample <- function(data, times){
+  mixed_data <- data.frame() # 創建空的 dataframe 儲存mixeddata
+  for (i in 1:times) {
+    vietnam_sample <- vietnam[sample(1:70, 1), ] #隨機抽取 rawdata 中的越南米
+    taiwan_sample <- taiwan[sample(1:80, 1), ]   #隨機抽取 rawdata 中的臺灣米
+    
+    ratio_t <- sample(1:9, 1)/10 #隨機產生混米中臺灣米的比例
+    ratio_v <- 1-ratio_t #越南米的比例
+    
+    vietnam_values <- as.numeric(vietnam_sample[, 2:6]) 
+    taiwan_values <- as.numeric(taiwan_sample[, 2:6])
+    
+    #計算混米比例
+    mixed_values <- round(vietnam_values * ratio_v + taiwan_values * ratio_t, 3) 
+    
+    mixed_sample <- data.frame(t(mixed_values))
+    
+    #將混米的國家標記為mixed並且將比例的cbind上去
+    mixed_sample <- cbind(mixed_sample, Country = "Mixed", ratio_t, ratio_v)
+    #把純米跟混米資料結合成同一個資料框
+    mixed_data <- rbind(mixed_data, mixed_sample)
+  }
+  return(mixed_data)
+}
+
+m <- mixedsample(raw.data, 150) #生成150筆混米資料
+data.clean <- rbind(t, v, m) 
+rownames(data.clean) <- NULL
+
+###LDA
+library(caret)
+library(MASS)
+
+train_index <- sample(1:nrow(data.clean), 0.8 * nrow(data.clean)) # 隨機抽建立訓練集編號
+
+train_data <- data.clean[train_index, ]
+test_data <- data.clean[-train_index, ]
+
+lda_model <- lda(Country ~ X1 + X2 + X3 + X4 + X5, data = train_data)
+
+print(lda_model)
+
+# training set
+LDA_fit <- predict(lda_model, data = train_data)
+table(predict = LDA_fit$class, actual = train_data$Country)
+cfmaccuracy(table(predict = LDA_fit$class, actual = train_data$Country))
+
+actual_numeric <- as.numeric(train_data$Country)
+predict_numeric <- as.numeric(LDA_fit$class)
+mean((predict_numeric - actual_numeric)**2)
+
+# testing set
+LDA_tfit <- predict(lda_model, newdata = test_data)
+lda_test_conf_matrix <- table(predict = LDA_tfit$class, actual = test_data$Country)
+cfmaccuracy(lda_test_conf_matrix)
+cat("準確率：", accuracy, "\n")
+
+actual_numeric <- as.numeric(test_data$Country)
+predict_numeric <- as.numeric(LDA_tfit$class)
+mean((predict_numeric - actual_numeric)^2)
+
+## 採用 K-folds CV
+
+#設定cv的控制參數
+cv_control <- trainControl(method = "cv", number = 10) # 10-fold
+
+lda_cv_model <- train(Country ~ X1 + X2 + X3 + X4 + X5, 
+                      data = train_data, 
+                      method = "lda", 
+                      trControl = cv_control)
+
+LDA_cv_fit <- predict(lda_cv_model, newdata = test_data)
+
+lda_cv_conf_matrix <- table(predict = LDA_cv_fit, actual = test_data$Country)
+
+accuracy <- sum(diag(lda_cv_conf_matrix)) / sum(lda_cv_conf_matrix)
+cat("準確率：", accuracy, "\n")
+
+actual_numeric <- as.numeric(test_data$Country)
+predict_numeric <- as.numeric(LDA_cv_fit$class)
+mean((predict_numeric - actual_numeric)^2)
+
+## 採用 LOOCV ???
+
+pred <- vector("character", nrow(data.clean))
+
+for (i in 1:nrow(data.clean)) {
+  
+  train <- data.clean[-i, ]
+  test <- data.clean[i, ]
+  
+  lda_loocv_model <- lda(Country ~ X1 + X2 + X3 + X4 + X5, data = train)
+  
+  pred[i] <- predict(lda_loocv_model, newdata = test)$class
+  
+}
+
+conf_loocv_matrix <- table(predict = pred, actual = data.clean$Country)
+rownames(conf_loocv_matrix) <- c("Mixed", "Taiwan", "Vietnam")
+cfmaccuracy(conf_loocv_matrix)
+actual_numeric <- as.numeric(data.clean$Country)
+predict_numeric <- as.numeric(pred)
+mean((predict_numeric - actual_numeric)^2)
+
+# PLS
+
+install.packages("pls")
+library(pls)
+train_response <- model.matrix(~ Country - 1, data = train_data)
+test_response <- model.matrix(~ Country - 1, data = test_data)
+
+# 執行 PLS 分析
+pls_model <- plsr(train_response ~ X1 + X2 + X3 + X4 + X5, 
+                  data = train_data, scale = TRUE, validation = "CV", 
+                  segments = 10)
+
+pls_summary <- summary(pls_model)
+
+validationplot(pls_model, val.type = "MSEP")
+
+# 確認最佳成分數
+optimal_components <- min(which.min(pls_model$validation$PRESS), ncol(data.clean[, 2:6]))
+
+pls_cv_fit <- predict(pls_model, newdata = test_data, ncomp = optimal_components)
+
+# 轉換為分類結果
+# 找到每行的最大值索引 (對應於 Country 類別)
+pls_class <- apply(pls_cv_fit, 1, which.max)
+
+# 將索引轉換為原始類別標籤
+levels <- colnames(train_response)  # 原始標籤名稱
+pls_class <- factor(levels[pls_class], levels = levels)
+
+
+# 建立混淆矩陣並計算準確率
+pls_cv_conf_matrix <- table(Predicted = pls_class, Actual = test_data$Country)
+print(pls_cv_conf_matrix)
+cfmaccuracy(pls_cv_conf_matrix)
+
+##########################
+#### Ridge Regression ####
+##########################
+
+library(glmnet)
+
+X_train <- as.matrix(train_data[, c("X1", "X2", "X3", "X4", "X5")])
+X_test <- as.matrix(test_data[, c("X1", "X2", "X3", "X4", "X5")])
+
+y_train <- as.factor(train_data$Country)
+y_test <- as.factor(test_data$Country)
+
+# 使用 glmnet 進行 Ridge Regression
+ridge_model <- cv.glmnet(X_train, y_train, 
+                         alpha = 0,           # alpha = 0 表示 Ridge Regression
+                         family = "multinomial",  # 多分類問題
+                         nfolds = 10)         # 10-fold Cross-Validation
+
+# 顯示最佳的 lambda 值
+optimal_lambda <- ridge_model$lambda.min
+plot(ridge_model)
+cat("最佳的 Lambda 值：", optimal_lambda, "\n")
+
+# 預測測試集
+ridge_cv_fit <- predict(ridge_model, newx = X_test, s = optimal_lambda, 
+                      type = "class")
+# 建立混淆矩陣並計算準確率
+conf_ridge_cv_matrix <- table(Predicted = ridge_cv_fit, Actual = y_test)
+cfmaccuracy(conf_ridge_cv_matrix)
+
+
+###############
+#### LASSO ####
+###############
+
+# 使用 glmnet 進行 LASSO Regression
+lasso_model <- cv.glmnet(X_train, y_train, 
+                         alpha = 1,           # alpha = 1 表示 LASSO
+                         family = "multinomial",  # 適用於多分類問題
+                         nfolds = 10)         # 10-fold Cross-Validation
+
+# optimal lambda 
+optimal_lambda <- lasso_model$lambda.min
+plot(lasso_model)
+cat("最佳的 Lambda 值：", optimal_lambda, "\n")
+
+# 預測測試集
+lasso_cv_fit <- predict(lasso_model, newx = X_test, s = optimal_lambda, 
+                      type = "class")
+
+conf_lasso_cv_matrix <- table(Predicted = lasso_cv_fit, Actual = y_test)
+
+cfmaccuracy(conf_lasso_cv_matrix)
+
+
+#######################
+#### Random Forest ####
+#######################
+
+install.packages("randomForest")
+library(randomForest)
+
+set.seed(42)
+
+rf_model <- randomForest(x = X_train, y = y_train, 
+                         ntree = 500,  # 樹的數量
+                         mtry = 3,     # 每次分割時的特徵數
+                         importance = TRUE)  # 計算特徵重要性
+
+plot(rf_model)
+
+rf_fit <- predict(rf_model, newdata = X_test)
+
+conf_rf_matrix <- table(Predicted = rf_fit, Actual = y_test)
+cfmaccuracy(conf_rf_matrix)
+
+# 查看特徵重要性
+importance(rf_model)
+
+# 繪製特徵重要性圖
+varImpPlot(rf_model)
+
+
+
+#############
+#### SVM ####
+#############
+
+library(e1071)
+
+# 特徵矩陣 (X) 和目標變數 (y)
+X_train <- train_data[, c("X1", "X2", "X3", "X4", "X5")]
+y_train <- as.factor(train_data$Country)
+
+X_test <- test_data[, c("X1", "X2", "X3", "X4", "X5")]
+y_test <- as.factor(test_data$Country)
+
+train_data$Country <- as.factor(train_data$Country)
+test_data$Country <- as.factor(test_data$Country)
+
+
+# 訓練 SVM 模型，使用線性核函數
+svm_model <- svm(Country ~ ., 
+                 data = train_data, 
+                 kernel = "linear",  # 核函數選擇：linear, radial, polynomial, sigmoid
+                 cost = 1,           # 正則化參數
+                 scale = TRUE)       # 標準化特徵
+
+svm_model_2 <- svm(Country ~ ., 
+                 data = train_data, 
+                 kernel = "radial",  # 核函數選擇：linear, radial, polynomial, sigmoid
+                 cost = 1,           # 正則化參數
+                 scale = TRUE)       # 標準化特徵
+
+# 在測試集上進行預測
+svm_fit_1 <- predict(svm_model, newdata = test_data)
+svm_fit_2 <- predict(svm_model_2, newdata = test_data)
+
+conf_svm_1_matrix <- table(Predicted = svm_fit_1, Actual = test_data$Country)
+conf_svm_2_matrix <- table(Predicted = svm_fit_2, Actual = test_data$Country)
+
+cfmaccuracy(conf_svm_1_matrix)
+cfmaccuracy(conf_svm_2_matrix)
+
+
+#########################################################################################
+#########################################################################################
+#########################################################################################
+
+train_data$Country <- as.factor(train_data$Country)
+test_data$Country <- as.factor(test_data$Country)
+
+mixed_data <- train_data[train_data$Country == "Mixed", ] #混米訓練集
+test_mixed <- test_data[test_data$Country == "Mixed", ] #混米測試集
+
+#### Linear Models
+
+lm_model <- lm(ratio_t ~ X1 + X2 + X3 + X4 + X5, data = mixed_data)
+lm_model_2 <- lm(ratio_v ~ X1 + X2 + X3 + X4 + X5, data = mixed_data)
+
+ratio_t_pred <- predict(lm_model, newdata = test_mixed)
+ratio_t_pred_with_ci <- predict(lm_model, newdata = test_mixed, 
+                                interval = "confidence", level = 0.95)
+
+ratio_v_pred <- predict(lm_model_2, newdata = test_mixed)
+ratio_v_pred_with_ci <- predict(lm_model_2, newdata = test_mixed, 
+                                interval = "confidence", level = 0.95)
+
+####SVM
+
+svm_model_radial <- svm(Country ~ ., 
+                 data = train_data, 
+                 kernel = "radial",  # RBF 核函數適合非線性數據
+                 cost = 1,           # 正規化參數
+                 scale = TRUE)       # 標準化特徵
+
+svm_model_linear <- svm(Country ~ ., 
+                 data = train_data, 
+                 kernel = "linear",  
+                 cost = 1,           # 正規化參數
+                 scale = TRUE)       # 標準化特徵
+
+svm_pred_linear <- predict(svm_model_linear, newdata = test_data)
+svm_pred_radial <- predict(svm_model_radial, newdata = test_data)
+
+conf_matrix_svm_linear <- table(predict = svm_pred_linear, actual = test_data$Country)
+cfmaccuracy(conf_matrix_svm_linear)
+
+conf_matrix_svm_radial <- table(predict = svm_pred_radial, actual = test_data$Country)
+cfmaccuracy(conf_matrix_svm_radial)
+
+mix_data <- train_data[train_data$Country == "Mixed", ]
+
+X_mixed <- as.matrix(mix_data[, c("X1", "X2", "X3", "X4", "X5")])
+y_mixed <- mix_data$ratio_t
+
+ridge_model_f <- cv.glmnet(X_mixed, y_mixed, alpha = 0)
+
+# 混米樣本預測
+X_test_mixed <- as.matrix(test_data[test_data$Country == "Mixed", 
+                                    c("X1", "X2", "X3", "X4", "X5")])
+
+ratio_t_pred <- predict(ridge_model, X_test_mixed, s = "lambda.min")
+
+# 區間估計（簡單 Bootstrap 方法）
+set.seed(42)
+
+boot_ratio_t <- replicate(1000, {
+  sample_idx <- sample(1:nrow(mix_data), nrow(mix_data), replace = TRUE)
+  ridge_boot <- cv.glmnet(X_mixed[sample_idx, ], y_mixed[sample_idx], alpha = 0)
+  predict(ridge_boot, X_test_mixed, s = "lambda.min")
+})
+
+ci <- apply(boot_ratio_t, 1, quantile, probs = c(0.025, 0.975))
