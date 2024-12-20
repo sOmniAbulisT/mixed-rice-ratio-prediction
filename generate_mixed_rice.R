@@ -272,6 +272,10 @@ cfmaccuracy(svm_cm_s)
 #########################################################################################
 #########################################################################################
 
+#######################
+####混米比例估計模型####
+#######################
+
 m2 <- mixedsample(raw.data, 1000)
 train_index <- sample(1:nrow(m2), 0.8 * nrow(m2)) # 隨機抽建立訓練集編號
 train_data2 <- m2[train_index, ]
@@ -297,6 +301,7 @@ ratio_t_pred_with_ci <- predict(lm_model_t, newdata = test_data2,
 ratio_v_pred_with_ci <- predict(lm_model_v, newdata = test_data2, 
                                 interval = "confidence", level = 0.95)
 
+##結合鑑別和混米比例估計模型
 MRPM <- function(newdata){
   svm_p <- predict(svm_model_p, newdata = newdata)
   input <- newdata[which(svm_p == "Mixed"),]
@@ -317,5 +322,39 @@ MRPM <- function(newdata){
   }
   return(cat("有",nrow(input),"筆資料是混米"))
 }
+
+##結合鑑別和混米比例估計模型並輸出表格
+MRPM <- function(newdata){
+  pt <- data.frame(Actual = rep(NA,nrow(newdata)),
+                   Predict = rep(NA,nrow(newdata)),
+                   Ratio = rep(NA,nrow(newdata)),
+                   CI = rep(NA,nrow(newdata)))
+  
+  svm_p <- predict(svm_model_p, newdata = newdata)
+  row.name <- as.numeric(row.names(newdata))
+  mix <- c()
+  
+  v <- predict(lm_model_v, newdata = newdata, 
+               interval = "confidence", level = 0.95)
+  v <- round(v,3)
+  
+  for (n in 1:nrow(newdata)) {
+    if (svm_p[n] == "Taiwan"){
+      pt[n,] <- c(newdata$Country[n],"Taiwan",NA,NA)
+      
+    }else if (svm_p[n] == "Vietnam"){
+      pt[n,] <- c(newdata$Country[n],"Vietnam",NA,NA)
+    }else {
+      mix <- rbind(mix,n)
+      pt[n,] <- c(Actual = newdata$Country[n], Predict = "Mix",
+              Ratio = v[n,1], CI = paste("[",v[n,2],",",v[n,3],"]"))
+    }
+  }
+  return(pt)
+}
+
+result <- MRPM(dat)
+View(result)
+write.csv(result,".csv")
 
  
